@@ -1,126 +1,99 @@
-# VerbalCodeAI 🤖
+Skip to content
+Navigation Menu
+SWORDIntel
+VerbalCodeAi
 
-[![GitHub stars](https://img.shields.io/github/stars/vibheksoni/VerbalCodeAi?style=social)](https://github.com/vibheksoni/VerbalCodeAi/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/vibheksoni/VerbalCodeAi?style=social)](https://github.com/vibheksoni/VerbalCodeAi/network/members)
-[![GitHub issues](https://img.shields.io/github/issues/vibheksoni/VerbalCodeAi)](https://github.com/vibheksoni/VerbalCodeAi/issues)
-[![GitHub license](https://img.shields.io/github/license/vibheksoni/VerbalCodeAi)](https://github.com/vibheksoni/VerbalCodeAi/blob/master/LICENSE)
-[![Python Version](https://img.shields.io/badge/python-3.11.6-blue)](https://www.python.org/downloads/release/python-3116/)
-[![OpenVINO Support](https://img.shields.io/badge/Inference-OpenVINO-orange)](https://docs.openvino.ai/)
-[![Website](https://img.shields.io/badge/website-verbalcode.xyz-brightgreen)](https://verbalcode.xyz) <a href="https://discord.gg/KpjSDEwWCF" target="_blank"> <img src="https://img.shields.io/static/v1?label=Discord&message=Join%20Us&color=7289DA&logo=discord&logoColor=white&style=for-the-badge" alt="Join our Discord"/> </a>
+Type / to search
+Code
+Pull requests
+Actions
+Projects
+Wiki
+Security
+Insights
+Settings
+VerbalCodeAi
+/
+README.md
+in
+master
 
-Join our Discord server to hang out, ask questions, or offer help! We're currently looking for assistance in setting up the server, so if you're experienced with Discord setup, your help would be greatly appreciated! Click [here](https://discord.gg/KpjSDEwWCF) to join.
+Edit
 
-Ever felt lost in a complex codebase? Wish you had a smart assistant to help you navigate and understand code right in your terminal? VerbalCodeAI is here to help! This powerful AI-powered tool acts as your personal code companion, leveraging advanced embedding techniques, Large Language Model (LLM) integration, **and OpenVINO accelerated inference**. It offers intelligent code analysis, helps you search and understand your project, and provides assistance directly within your command-line interface, making your development workflow smoother and more efficient.
+Preview
+Indent mode
 
-```yaml
-.       .      .          .    .--.        .           .
- \     /       |          |   :            |          / \     o
-  \   /.-. .--.|.-.  .-.  |   |    .-.  .-.| .-.     /___\    .
-   \ /(.-' |   |   )(   ) |   :   (   )(   |(.-'    /     \   |
-    '  `--''   '`-'  `-'`-`-   `--'`-'  `-'`-`--'  '       `-' `-'
-                       [AI Assistant for Code]
-```
+Spaces
+Indent size
 
-<div align="center">
-  <img src="Showcase/VerbalCodeShowcase.gif" alt="VerbalCodeAI Showcase" style="max-width: 800px; max-height: 400px; width: 100%; height: auto;"/>
-</div>
+2
+Line wrap mode
 
-<details>
-<summary><strong>Table of Contents</strong></summary>
-
-* [VerbalCodeAI 🤖](#verbalcodeai-)
-
-  * [Getting Started](#getting-started)
-
-    * [Prerequisites](#prerequisites)
-    * [Installation](#installation)
-
-      * [Windows](#windows)
-      * [Linux/macOS](#linuxmacos)
-    * [Manual Installation](#manual-installation)
-  * [Usage](#usage)
-
-    * [Starting the Application](#starting-the-application)
-    * [Indexing a Project](#indexing-a-project)
-    * [Main Menu Options](#main-menu-options)
-    * [Agent Mode Tools](#agent-mode-tools)
-    * [HTTP API Server](#http-api-server)
-    * [MCP Integration](#mcp-integration)
-  * [Configuration](#configuration)
-
-    * [Supported LLM & Inference Providers](#supported-llm--inference-providers)
-    * [Performance Settings](#performance-settings)
-    * [UI Settings](#ui-settings)
-  * [Video Showcase](#video-showcase)
-  * [Image Showcase](#image-showcase)
-  * [Project Structure](#project-structure)
-  * [Contributing](#contributing)
-  * [License](#license)
-  * [Links](#links)
-  * [Acknowledgements](#acknowledgements)
-
-</details>
-
-## Getting Started
-
-### Prerequisites
-
-* Python 3.11.6 (tested and recommended version)
-* [OpenVINO™ Toolkit](https://docs.openvino.ai/latest/openvino_docs_install_guides_installing_openvino.html) **(for accelerated inference)**
-* [Ollama](https://ollama.com/download) (for local model execution)
-
-> **Note:** The application has been specifically tested with Python 3.11.6 on Windows and Linux. While it may work with other versions, for the best experience, we recommend using the tested version.
-
-### Installation
-
-#### Windows
-
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/vibheksoni/VerbalCodeAi.git
-   cd VerbalCodeAi
-   ```
-
-2. Run the setup script (includes OpenVINO installation):
-
-   ```bash
-   setup_windows.bat
-   ```
-
-#### Linux/macOS
-
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/vibheksoni/VerbalCodeAi.git
-   cd VerbalCodeAi
-   ```
-
-2. Make the setup script executable and run it (installs OpenVINO):
-
-   ```bash
-   chmod +x setup_linux.sh
-   ./setup_linux.sh
-   ```
-
-### Manual Installation
-
-If you prefer to set up manually:
-
-1. Create a virtual environment:
-
-   ```bash
-   python -m venv venv
-   ```
-
-2. Activate the virtual environment:
-
-   * Windows: `venv\Scripts\activate`
-   * Linux/macOS: `source venv/bin/activate`
-
-3. Install dependencies (including OpenVINO Python packages):
-
+Soft wrap
+Editing README.md file contents
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
    ```bash
    pip install -r requirements.txt
    pip install openvino openvino-dev[onnx]
@@ -183,3 +156,8 @@ OPENVINO_DEVICE=CPU
 ---
 
 Made with ❤️ by <a href="https://github.com/vibheksoni">Vibhek Soni</a>
+
+Use Control + Shift + m to toggle the tab key moving focus. Alternatively, use esc then tab to move to the next interactive element on the page.
+Aucun fichier choisi
+Attach files by dragging & dropping, selecting or pasting them.
+Editing VerbalCodeAi/README.md at master · SWORDIntel/VerbalCodeAi
