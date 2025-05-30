@@ -1,92 +1,127 @@
+# Resolved Requirements - Highest Compatible Versions
+# Generated for Project QUANTUM NEXUS
+# Date: 2024
+
+# === Core Dependencies ===
 annotated-types==0.7.0
+pydantic==2.11.4
+pydantic-settings==2.9.1
+pydantic_core==2.33.2
+python-dotenv==1.1.0
+typing_extensions==4.13.2
+typing-inspection==0.4.0
+
+# === ML/AI Frameworks ===
+numpy>=1.23.5,<2.0.0  # Critical: Many packages incompatible with numpy 2.0
+scipy==1.15.3
+scikit-learn==1.6.1
+transformers==4.36.2  # Stable version for ONNX/OpenVINO compatibility
+openvino>=2025.0.0
+openvino-model-api==0.3.0
+onnx==1.16.1
+optimum==1.16.1
+huggingface-hub==0.31.4
+tokenizers>=0.14.0,<0.19.0  # Version constraint for transformers 4.36.2 compatibility
+joblib==1.5.0
+threadpoolctl==3.6.0
+
+# === AI/LLM API Clients ===
+openai==1.78.1
 anthropic==0.51.0
-anyio==4.9.0
-beautifulsoup4==4.13.4
-cachetools==5.5.2
-certifi==2025.4.26
-charset-normalizer==3.4.2
-click==8.1.8
-colorama==0.4.6
-distro==1.9.0
-dotenv==0.9.9
-duckduckgo_search==8.0.2
-filelock==3.18.0
-fsspec==2025.5.0
+google-generativeai==0.8.5
 google-ai-generativelanguage==0.6.15
 google-api-core==2.25.0rc1
 google-api-python-client==2.169.0
 google-auth==2.40.1
 google-auth-httplib2==0.2.0
-google-generativeai==0.8.5
-googleapis-common-protos==1.70.0
-googlesearch-python==1.3.0
 groq==0.25.0
-grpcio==1.71.0
-grpcio-status==1.71.0
-h11==0.16.0
-httpcore==1.0.9
-httplib2==0.22.0
-httpx==0.28.1
-httpx-sse==0.4.0
-huggingface-hub==0.31.4
-idna==3.10
-iniconfig==2.1.0
-jiter==0.9.0
-joblib==1.5.0
-linkify-it-py==2.0.3
-lxml==5.4.0
-markdown-it-py==3.0.0
-mcp==1.9.0
-mdit-py-plugins==0.4.2
-mdurl==0.1.2
-numpy==2.2.5
 ollama==0.4.8
-openai==1.78.1
-packaging==25.0
-platformdirs==4.3.8
-pluggy==1.5.0
-primp==0.15.0
-proto-plus==1.26.1
-protobuf==5.29.4
-psutil==7.0.0
-pyasn1==0.6.1
-pyasn1_modules==0.4.2
-pydantic==2.11.4
-pydantic-settings==2.9.1
-pydantic_core==2.33.2
-Pygments==2.19.1
-pyparsing==3.2.3
+
+# === Web & Networking ===
+requests==2.32.3
+httpx==0.28.1
+httpcore==1.0.9
+httpx-sse==0.4.0
+beautifulsoup4==4.13.4
+lxml==5.4.0
+uvicorn==0.34.2
+starlette==0.46.2
+sse-starlette==2.3.5
+anyio==4.9.0
+sniffio==1.3.1
+h11==0.16.0
+
+# === Testing & Development ===
 pytest==8.3.5
 pytest-asyncio==0.26.0
-python-dotenv==1.1.0
-python-multipart==0.0.20
-pytz==2025.2
-PyYAML==6.0.2
-requests==2.32.3
-rich==14.0.0
-rsa==4.9.1
-scikit-learn==1.6.1
-scipy==1.15.3
-shellingham==1.5.4
-sniffio==1.3.1
-soupsieve==2.7
-sse-starlette==2.3.5
-starlette==0.46.2
-textual==3.2.0
-threadpoolctl==3.6.0
-tokenizers==0.21.1
-tqdm==4.67.1
+mcp==1.9.0
 tree-sitter==0.24.0
+tree-sitter-python==0.23.6
 tree-sitter-c-sharp==0.23.1
 tree-sitter-embedded-template==0.23.2
 tree-sitter-language-pack==0.7.3
-tree-sitter-python==0.23.6
 tree-sitter-yaml==0.7.0
+
+# === CLI & Terminal ===
+click==8.1.8
 typer==0.15.4
-typing-inspection==0.4.0
-typing_extensions==4.13.2
+textual==3.2.0
+rich==14.0.0
+colorama==0.4.6
+shellingham==1.5.4
+tqdm==4.67.1
+
+# === Parsing & Serialization ===
+PyYAML==6.0.2
+markdown-it-py==3.0.0
+mdit-py-plugins==0.4.2
+mdurl==0.1.2
+linkify-it-py==2.0.3
 uc-micro-py==1.0.3
+jiter==0.9.0
+pyparsing==3.2.3
+
+# === Google/Protocol Dependencies ===
+googleapis-common-protos==1.70.0
+grpcio==1.71.0
+grpcio-status==1.71.0
+proto-plus==1.26.1
+protobuf==5.29.4
+httplib2==0.22.0
 uritemplate==4.1.1
-urllib3==2.4.0
+
+# === System & Utility ===
+psutil==7.0.0
+filelock==3.18.0
+fsspec==2025.5.0
+platformdirs==4.3.8
+distro==1.9.0
+primp==0.15.0
 uv==0.7.6
-uvicorn==0.34.2
+
+# === Security & Crypto ===
+certifi==2025.4.26
+cryptography>=41.0.0  # Added for security operations
+rsa==4.9.1
+pyasn1==0.6.1
+pyasn1_modules==0.4.2
+cachetools==5.5.2
+
+# === Other Utilities ===
+charset-normalizer==3.4.2
+idna==3.10
+urllib3==2.4.0
+soupsieve==2.7
+Pygments==2.19.1
+packaging==25.0
+pytz==2025.2
+duckduckgo_search==8.0.2
+googlesearch-python==1.3.0
+python-multipart==0.0.20
+iniconfig==2.1.0
+pluggy==1.5.0
+dotenv==0.9.9# Download the model (this will take some time)
+git clone https://huggingface.co/codellama/CodeLlama-7b-hf /home/john/Documents/GitHub/VerbalCodeAi/models/codellama
+
+# Convert to OpenVINO IR format
+python -c "from optimum.exporters.openvino import export_model; export_model('models/codellama', output_dir='models/codellama-openvino', device='NPU')"

@@ -10,6 +10,7 @@ Supported providers:
 - Anthropic (Claude models)
 - Groq (high-performance LLMs)
 - OpenRouter (various cloud models)
+- OpenVINO (Intel NPU hardware acceleration)
 
 Features:
 - Automatic model pulling for Ollama
@@ -54,6 +55,13 @@ import openai
 from anthropic import Anthropic, AsyncAnthropic
 from groq import Groq, AsyncGroq
 
+# OpenVINO imports
+import openvino
+from openvino.runtime import Core, Tensor
+import numpy as np
+from pathlib import Path
+import onnx
+
 logger = logging.getLogger("VerbalCodeAI.LLMs")
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
@@ -62,6 +70,13 @@ AI_CHAT_PROVIDER: str = os.getenv("AI_CHAT_PROVIDER", "ollama")
 AI_EMBEDDING_PROVIDER: str = os.getenv("AI_EMBEDDING_PROVIDER", "ollama")
 AI_DESCRIPTION_PROVIDER: str = os.getenv("AI_DESCRIPTION_PROVIDER", "ollama")
 AI_AGENT_BUDDY_PROVIDER: str = os.getenv("AI_AGENT_BUDDY_PROVIDER", "ollama")
+
+# OpenVINO NPU settings
+OPENVINO_MODEL_DIR: str = os.getenv("OPENVINO_MODEL_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "models"))
+OPENVINO_DEVICE: str = os.getenv("OPENVINO_DEVICE", "NPU")
+OPENVINO_CHAT_MODEL: str = os.getenv("OPENVINO_CHAT_MODEL", "")
+OPENVINO_EMBEDDING_MODEL: str = os.getenv("OPENVINO_EMBEDDING_MODEL", "")
+OPENVINO_MODEL_CACHE: bool = os.getenv("OPENVINO_MODEL_CACHE", "TRUE").upper() == "TRUE"
 AI_CHAT_API_KEY: str = os.getenv("AI_CHAT_API_KEY")
 AI_EMBEDDING_API_KEY: str = os.getenv("AI_EMBEDDING_API_KEY")
 AI_DESCRIPTION_API_KEY: str = os.getenv("AI_DESCRIPTION_API_KEY")
@@ -367,6 +382,7 @@ PERFORMANCE_METRICS: Dict[
         "anthropic": {"requests": 0, "time": 0.0},
         "groq": {"requests": 0, "time": 0.0},
         "openrouter": {"requests": 0, "time": 0.0},
+        "openvino": {"requests": 0, "time": 0.0},
     },
 }
 
@@ -574,6 +590,22 @@ def _get_embedding_dimensions() -> int:
         return model_dimensions.get(EMBEDDING_MODEL, 1536)
     elif AI_EMBEDDING_PROVIDER == "google":
         return 768
+    elif AI_EMBEDDING_PROVIDER == "openvino":
+        # Get dimensions from the model configuration or default to 768 for transformer-based models
+        try:
+            model_path = get_openvino_model_path(OPENVINO_EMBEDDING_MODEL)
+            if model_path and os.path.exists(model_path):
+                # Try to infer the output shape from the model
+                ie = Core()
+                model = ie.read_model(model_path)
+                output_shape = model.outputs[0].shape
+                if len(output_shape) > 1 and output_shape[1] > 0:
+                    return output_shape[1]
+            # Default to 768 if we can't infer the dimension
+            return 768
+        except Exception as e:
+            logger.error(f"Error getting OpenVINO embedding dimensions: {e}")
+            return 768
     else:
         return 384
 
@@ -721,6 +753,17 @@ def generate_embed(text: Union[str, List[str]]) -> List[List[float]]:
                     logger.error(f"Google API error with model {EMBEDDING_MODEL}: {str(e)}")
                     logger.error(f"Error details: {type(e).__name__}: {str(e)}")
                     embeddings_for_misses = [[0.0] * embedding_dims] * len(texts_to_process)
+        elif AI_EMBEDDING_PROVIDER == "openvino":
+            if is_small_batch:
+                logger.debug("Using OpenVINO NPU provider for embeddings")
+            try:
+                embeddings_for_misses = openvino_generate_embeddings(texts_to_process, embedding_dims)
+                if is_small_batch:
+                    logger.debug(f"OpenVINO NPU returned {len(embeddings_for_misses)} embeddings successfully")
+            except Exception as e:
+                logger.error(f"OpenVINO NPU error: {str(e)}")
+                logger.error(f"Error details: {type(e).__name__}: {str(e)}")
+                embeddings_for_misses = [[0.0] * embedding_dims] * len(texts_to_process)
         elif AI_EMBEDDING_PROVIDER == "openai":
             if is_small_batch:
                 logger.debug("Using OpenAI provider for embeddings")
@@ -978,616 +1021,242 @@ def generate_response(
                     )
                 else:
                     raise
-        else:
-            response = _generate_response_ollama(
-                messages, system_prompt, temperature, max_tokens, chat_model
-            )
-    except Exception as e:
-        error_msg = f"Error generating response with provider '{chat_provider}': {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        raise Exception(error_msg)
-
-    chat_id = ""
-    if CHAT_LOGS_ENABLED and project_path:
-        chat_id = log_chat(user_query, response, project_path)
-
-    if MEMORY_ENABLED and add_to_memory:
-        _, _, clean_response = parse_thinking_tokens(response)
-
-        memory_entry = create_memory_entry(user_query, clean_response)
-        if memory_entry:
-            conversation_memory.add_memory(
-                memory_entry,
-                metadata={
-                    "query": user_query,
-                    "timestamp": datetime.datetime.now().isoformat(),
-                    "chat_id": chat_id
-                }
-            )
-
-    if parse_thinking:
-        return parse_thinking_tokens(response)
-    else:
-        return response
-
-
-def create_memory_entry(query: str, response: str, max_length: int = 200) -> str:
-    """Create a concise memory entry from a query and response.
-
-    Args:
-        query (str): The user's query.
-        response (str): The AI's response.
-        max_length (int, optional): Maximum length of the memory entry. Defaults to 200.
-
-    Returns:
-        str: A concise memory entry, or empty string if it couldn't be created.
-    """
-    if len(response) <= max_length:
-        return response
-
-    try:
-        if len(query) < 50:
-            prefix = f"Q: {query.strip()}\nA: "
-            max_response_length = max_length - len(prefix)
-
-            if max_response_length > 50:
-                paragraphs = [p.strip() for p in response.split('\n\n') if p.strip()]
-                if paragraphs:
-                    first_para = paragraphs[0]
-                    if len(first_para) <= max_response_length:
-                        return prefix + first_para
-
-                    sentences = [s.strip() for s in first_para.split('.') if s.strip()]
-                    result = ""
-                    for sentence in sentences:
-                        if len(result) + len(sentence) + 1 <= max_response_length:
-                            result += sentence + "."
-                        else:
-                            break
-
-                    if result:
-                        return prefix + result
-
-        paragraphs = [p.strip() for p in response.split('\n\n') if p.strip()]
-        if paragraphs:
-            first_para = paragraphs[0]
-            if len(first_para) <= max_length:
-                return first_para
-
-            sentences = [s.strip() for s in first_para.split('.') if s.strip()]
-            result = ""
-            for sentence in sentences:
-                if len(result) + len(sentence) + 1 <= max_length:
-                    result += sentence + "."
-                else:
-                    break
-
-            if result:
-                return result
-
-        return response[:max_length] + "..."
-    except Exception as e:
-        logger.error(f"Error creating memory entry: {e}")
-        return response[:max_length] + "..."
-
-
-def detect_intent(query: str) -> str:
-    """Detect the intent of a user query using the LLM.
-
-    Args:
-        query (str): The user query.
-
-    Returns:
-        str: The detected intent category.
-    """
-    logger.debug(f"Detecting intent for query: {query}")
-
-    if len(query.strip()) <= 5:
-        lower_query = query.lower().strip()
-        if lower_query in ["hi", "hey", "hello"]:
-            logger.debug("Quick intent detection: GREETING")
-            return "GREETING"
-        if lower_query in ["bye", "goodbye"]:
-            logger.debug("Quick intent detection: FAREWELL")
-            return "FAREWELL"
-        if lower_query in ["thanks", "thx", "ty"]:
-            logger.debug("Quick intent detection: GRATITUDE")
-            return "GRATITUDE"
-
-    try:
-        template_vars = {"message": query}
-        intent_response = generate_response(
-            messages=[],
-            template_name="intent_detection",
-            template_vars=template_vars,
-            temperature=INTENT_DETECTION_TEMPERATURE,
-            max_tokens=INTENT_DETECTION_MAX_TOKENS,
-            parse_thinking=False,
-            use_memory=False,
-            add_to_memory=False
-        )
-
-        intent = intent_response.strip().upper()
-
-        valid_intents = [
-            "GREETING", "FAREWELL", "GRATITUDE", "SMALL_TALK",
-            "SIMPLE_QUESTION", "CODE_QUESTION", "FEATURE_REQUEST",
-            "HELP_REQUEST", "FEEDBACK", "OTHER"
-        ]
-
-        if intent in valid_intents:
-            logger.debug(f"LLM detected intent: {intent}")
-            return intent
-        else:
-            logger.warning(f"Invalid intent detected: {intent}, defaulting to CODE_QUESTION")
-            return "CODE_QUESTION"
-
-    except Exception as e:
-        logger.error(f"Error detecting intent: {e}")
-        return "CODE_QUESTION"
-
-
-@track_performance("google")
-def _generate_response_google(
-    messages: List[Dict[str, str]],
-    system_prompt: Optional[str] = None,
-    temperature: float = CHAT_MODEL_TEMPERATURE,
-    max_tokens: Optional[int] = CHAT_MODEL_MAX_TOKENS,
-    api_key: Optional[str] = None,
-    model_name: Optional[str] = None,
-) -> str:
-    """Generate a response using Google AI.
-
-    Args:
-        messages (List[Dict[str, str]]): Validated message list.
-        system_prompt (Optional[str], optional): System prompt. Defaults to None.
-        temperature (float, optional): Temperature. Defaults to CHAT_MODEL_TEMPERATURE.
-        max_tokens (Optional[int], optional): Max tokens. Defaults to CHAT_MODEL_MAX_TOKENS.
-        api_key (Optional[str], optional): Override the API key. Defaults to None (use environment variable).
-        model_name (Optional[str], optional): Override the model name. Defaults to None (use environment variable).
-
-    Returns:
-        str: Generated response.
-
-    Raises:
-        ValueError: If API key is not set.
-        Exception: If API call fails.
-    """
-    chat_api_key = api_key or AI_CHAT_API_KEY
-    chat_model = model_name or CHAT_MODEL
-
-    if not chat_api_key or chat_api_key.lower() == "none":
-        raise ValueError("API key not set for Google provider")
-
-    try:
-        if api_key:
-            genai.configure(api_key=chat_api_key)
-
-        generation_config = {
-            "temperature": temperature,
-            "max_output_tokens": max_tokens,
-            "top_p": CHAT_MODEL_TOP_P,
-            "top_k": CHAT_MODEL_TOP_K,
-        }
-
-        model = genai.GenerativeModel(
-            model_name=chat_model,
-            generation_config=generation_config,
-            safety_settings=[
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-            ],
-            system_instruction=system_prompt
-        )
-
-        chat_history = []
-        for msg in messages:
-            role = "user" if msg["role"] == "user" else "model"
-            chat_history.append({"role": role, "parts": msg["content"]})
-
-        if system_prompt:
-            response = model.generate_content(chat_history)
-        else:
-            response = model.generate_content(chat_history)
-
-        return response.text
-    except Exception as e:
-        logger.error(f"Google API error with model {chat_model}: {str(e)}", exc_info=True)
-        raise Exception(f"Google API error with model {chat_model}: {str(e)}")
-
-
-@track_performance("openai")
-def _generate_response_openai(
-    messages: List[Dict[str, str]],
-    system_prompt: Optional[str] = None,
-    temperature: float = CHAT_MODEL_TEMPERATURE,
-    max_tokens: Optional[int] = CHAT_MODEL_MAX_TOKENS,
-    api_key: Optional[str] = None,
-    model_name: Optional[str] = None,
-) -> str:
-    """Generate a response using OpenAI.
-
-    Args:
-        messages (List[Dict[str, str]]): Validated message list.
-        system_prompt (Optional[str], optional): System prompt. Defaults to None.
-        temperature (float, optional): Temperature. Defaults to CHAT_MODEL_TEMPERATURE.
-        max_tokens (Optional[int], optional): Max tokens. Defaults to CHAT_MODEL_MAX_TOKENS.
-        api_key (Optional[str], optional): Override the API key. Defaults to None (use environment variable).
-        model_name (Optional[str], optional): Override the model name. Defaults to None (use environment variable).
-
-    Returns:
-        str: Generated response.
-
-    Raises:
-        ValueError: If API key is not set or client is not initialized.
-        Exception: If API call fails.
-    """
-    global openai_client
-
-    chat_api_key = api_key or AI_CHAT_API_KEY
-    chat_model = model_name or CHAT_MODEL
-
-    if not chat_api_key or chat_api_key.lower() == "none":
-        raise ValueError("API key not set for OpenAI provider")
-
-    try:
-        if api_key or not openai_client:
-            openai_client = openai.OpenAI(api_key=chat_api_key)
-            logger.debug("OpenAI client initialized or reinitialized with provided API key")
-
-        formatted_messages = []
-
-        if system_prompt:
-            formatted_messages.append({"role": "system", "content": system_prompt})
-
-        for msg in messages:
-            formatted_messages.append({"role": msg["role"], "content": msg["content"]})
-
-        completion_params = {
-            "model": chat_model,
-            "messages": formatted_messages,
-            "temperature": temperature,
-            "top_p": CHAT_MODEL_TOP_P,
-        }
-
-        if max_tokens:
-            completion_params["max_tokens"] = max_tokens
-
-        response = openai_client.chat.completions.create(**completion_params)
-
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"OpenAI API error with model {chat_model}: {str(e)}", exc_info=True)
-        raise Exception(f"OpenAI API error with model {chat_model}: {str(e)}")
-
-
-@track_performance("anthropic")
-def _generate_response_anthropic(
-    messages: List[Dict[str, str]],
-    system_prompt: Optional[str] = None,
-    temperature: float = CHAT_MODEL_TEMPERATURE,
-    max_tokens: Optional[int] = CHAT_MODEL_MAX_TOKENS,
-    api_key: Optional[str] = None,
-    model_name: Optional[str] = None,
-) -> str:
-    """Generate a response using Anthropic Claude.
-
-    Args:
-        messages (List[Dict[str, str]]): Validated message list.
-        system_prompt (Optional[str], optional): System prompt. Defaults to None.
-        temperature (float, optional): Temperature. Defaults to CHAT_MODEL_TEMPERATURE.
-        max_tokens (Optional[int], optional): Max tokens. Defaults to CHAT_MODEL_MAX_TOKENS.
-        api_key (Optional[str], optional): Override the API key. Defaults to None (use environment variable).
-        model_name (Optional[str], optional): Override the model name. Defaults to None (use environment variable).
-
-    Returns:
-        str: Generated response.
-
-    Raises:
-        ValueError: If API key is not set or client is not initialized.
-        Exception: If API call fails.
-    """
-    global anthropic_client
-
-    chat_api_key = api_key or AI_CHAT_API_KEY
-    chat_model = model_name or CHAT_MODEL
-
-    if not chat_api_key or chat_api_key.lower() == "none":
-        raise ValueError("API key not set for Anthropic provider")
-
-    try:
-        if api_key or not anthropic_client:
-            anthropic_client = Anthropic(api_key=chat_api_key)
-            logger.debug("Anthropic client initialized or reinitialized with provided API key")
-
-        formatted_messages = []
-
-        for msg in messages:
-            if msg["role"] != "system":
-                formatted_messages.append({"role": msg["role"], "content": msg["content"]})
-            elif not system_prompt:
-                system_prompt = msg["content"]
-
-        completion_params = {
-            "model": chat_model,
-            "messages": formatted_messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "top_p": CHAT_MODEL_TOP_P,
-        }
-
-        if system_prompt:
-            completion_params["system"] = system_prompt
-
-        response = anthropic_client.messages.create(**completion_params)
-
-        return response.content[0].text
-    except Exception as e:
-        logger.error(f"Anthropic API error with model {chat_model}: {str(e)}", exc_info=True)
-        raise Exception(f"Anthropic API error with model {chat_model}: {str(e)}")
-
-
-@track_performance("groq")
-def _generate_response_groq(
-    messages: List[Dict[str, str]],
-    system_prompt: Optional[str] = None,
-    temperature: float = CHAT_MODEL_TEMPERATURE,
-    max_tokens: Optional[int] = CHAT_MODEL_MAX_TOKENS,
-    api_key: Optional[str] = None,
-    model_name: Optional[str] = None,
-) -> str:
-    """Generate a response using Groq.
-
-    Args:
-        messages (List[Dict[str, str]]): Validated message list.
-        system_prompt (Optional[str], optional): System prompt. Defaults to None.
-        temperature (float, optional): Temperature. Defaults to CHAT_MODEL_TEMPERATURE.
-        max_tokens (Optional[int], optional): Max tokens. Defaults to CHAT_MODEL_MAX_TOKENS.
-        api_key (Optional[str], optional): Override the API key. Defaults to None (use environment variable).
-        model_name (Optional[str], optional): Override the model name. Defaults to None (use environment variable).
-
-    Returns:
-        str: Generated response.
-
-    Raises:
-        ValueError: If API key is not set or client is not initialized.
-        Exception: If API call fails.
-    """
-    global groq_client
-
-    chat_api_key = api_key or AI_CHAT_API_KEY
-    chat_model = model_name or CHAT_MODEL
-
-    if not chat_api_key or chat_api_key.lower() == "none":
-        raise ValueError("API key not set for Groq provider")
-
-    try:
-        local_groq_client = Groq(api_key=chat_api_key)
-        logger.debug("Groq client initialized with provided API key")
-
-        formatted_messages = []
-
-        if system_prompt:
-            formatted_messages.append({"role": "system", "content": system_prompt})
-
-        for msg in messages:
-            formatted_messages.append({"role": msg["role"], "content": msg["content"]})
-
-        completion_params = {
-            "model": chat_model,
-            "messages": formatted_messages,
-            "temperature": temperature,
-            "top_p": CHAT_MODEL_TOP_P,
-        }
-
-        if max_tokens:
-            completion_params["max_tokens"] = max_tokens
-
-        response = local_groq_client.chat.completions.create(**completion_params)
-
-        return response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Groq API error with model {chat_model}: {str(e)}", exc_info=True)
-        raise Exception(f"Groq API error with model {chat_model}: {str(e)}")
-
-
-@track_performance("openrouter")
-def _generate_response_openrouter(
-    messages: List[Dict[str, str]],
-    system_prompt: Optional[str] = None,
-    temperature: float = CHAT_MODEL_TEMPERATURE,
-    max_tokens: Optional[int] = CHAT_MODEL_MAX_TOKENS,
-    api_key: Optional[str] = None,
-    model_name: Optional[str] = None,
-) -> str:
-    """Generate a response using OpenRouter.
-
-    Args:
-        messages (List[Dict[str, str]]): Validated message list.
-        system_prompt (Optional[str], optional): System prompt. Defaults to None.
-        temperature (float, optional): Temperature. Defaults to CHAT_MODEL_TEMPERATURE.
-        max_tokens (Optional[int], optional): Max tokens. Defaults to CHAT_MODEL_MAX_TOKENS.
-        api_key (Optional[str], optional): Override the API key. Defaults to None (use environment variable).
-        model_name (Optional[str], optional): Override the model name. Defaults to None (use environment variable).
-
-    Returns:
-        str: Generated response.
-
-    Raises:
-        Exception: If OpenRouter API encounters an error.
-    """
-    import time
-
-    chat_api_key = api_key or AI_CHAT_API_KEY
-    chat_model = model_name or CHAT_MODEL
-
-    if not chat_api_key or chat_api_key.lower() == "none":
-        raise ValueError("API key not set for OpenRouter provider")
-
-    formatted_messages = []
-
-    if system_prompt:
-        formatted_messages.append({"role": "system", "content": system_prompt})
-
-    formatted_messages.extend(messages)
-
-    payload = {
-        "model": chat_model,
-        "messages": formatted_messages,
-        "temperature": temperature,
-        "top_p": CHAT_MODEL_TOP_P,
-        "top_k": CHAT_MODEL_TOP_K,
-    }
-
-    if max_tokens:
-        payload["max_tokens"] = max_tokens
-
-    headers = {
-        "Authorization": f"Bearer {chat_api_key}",
-        "Content-Type": "application/json"
-    }
-
-    max_retries = 3
-    retry_delay = 2
-
-    for retry in range(max_retries):
-        try:
-            response = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
-
-            if response.status_code == 429:
-                retry_after = int(response.headers.get('X-RateLimit-Reset', 0)) / 1000 - time.time()
-                if retry_after <= 0:
-                    retry_after = retry_delay * (2 ** retry)
-
-                logger.warning(f"OpenRouter rate limit hit. Retrying in {retry_after:.1f} seconds. Attempt {retry+1}/{max_retries}")
-
-                if retry < max_retries - 1:
-                    time.sleep(min(retry_after, 15))
-                    continue
-                else:
-                    error_data = response.json() if response.text else {}
-                    error_msg = error_data.get('error', {}).get('message', 'Rate limit exceeded')
-                    raise Exception(f"Rate limit exceeded: {error_msg}. Try again in a few minutes or switch to a different provider.")
-
-            if response.status_code != 200:
-                error_message = f"OpenRouter API error: {response.status_code} - {response.text}"
-                logger.error(error_message)
-
-                if retry < max_retries - 1 and response.status_code >= 500:
-                    delay = retry_delay * (2 ** retry)
-                    logger.warning(f"Retrying in {delay} seconds. Attempt {retry+1}/{max_retries}")
-                    time.sleep(delay)
-                    continue
-                else:
-                    raise Exception(error_message)
-
-            response_data = response.json()
-
-            if "choices" not in response_data or len(response_data["choices"]) == 0:
-                error_message = "OpenRouter API returned no choices"
-                logger.warning(f"{error_message}. Attempt {retry+1}/{max_retries}")
-
-                if retry < max_retries - 1:
-                    delay = retry_delay * (2 ** retry)
-                    logger.warning(f"Retrying in {delay} seconds. Attempt {retry+1}/{max_retries}")
-                    time.sleep(delay)
-                    continue
-                else:
-                    raise Exception(error_message)
-
-            message_content = response_data["choices"][0]["message"]["content"]
-            return message_content
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error when calling OpenRouter API: {str(e)}", exc_info=True)
-
-            if retry < max_retries - 1:
-                delay = retry_delay * (2 ** retry)
-                logger.warning(f"Network error. Retrying in {delay} seconds. Attempt {retry+1}/{max_retries}")
-                time.sleep(delay)
+        elif chat_provider.lower() == "openvino":
+            # OpenVINO NPU doesn't support streaming yet
+            if stream:
+                async def fake_stream():
+                    result = await openvino_text_generation(
+                        messages, model or OPENVINO_CHAT_MODEL,
+                        temperature=temperature or CHAT_MODEL_TEMPERATURE,
+                        max_tokens=max_tokens or CHAT_MODEL_MAX_TOKENS,
+                        top_p=top_p or CHAT_MODEL_TOP_P,
+                        top_k=top_k or CHAT_MODEL_TOP_K,
+                    )
+                    yield result
+                return fake_stream()
             else:
-                raise Exception(f"Network error when calling OpenRouter API: {str(e)}")
-
-        except Exception as e:
-            logger.error(f"OpenRouter API error with model {chat_model}: {str(e)}", exc_info=True)
-            raise Exception(f"OpenRouter API error with model {chat_model}: {str(e)}")
-
-    raise Exception(f"Failed to get response from OpenRouter after {max_retries} attempts")
-
-
-@track_performance("ollama")
-def _generate_response_ollama(
-    messages: List[Dict[str, str]],
-    system_prompt: Optional[str] = None,
-    temperature: float = CHAT_MODEL_TEMPERATURE,
-    max_tokens: Optional[int] = CHAT_MODEL_MAX_TOKENS,
-    model_name: Optional[str] = None,
-) -> str:
-    """Generate a response using Ollama.
-
-    Args:
-        messages (List[Dict[str, str]]): Validated message list.
-        system_prompt (Optional[str], optional): System prompt. Defaults to None.
-        temperature (float, optional): Temperature. Defaults to CHAT_MODEL_TEMPERATURE.
-        max_tokens (Optional[int], optional): Max tokens. Defaults to CHAT_MODEL_MAX_TOKENS.
-        model_name (Optional[str], optional): Override the model name. Defaults to None (use environment variable).
-
-    Returns:
-        str: Generated response.
-
-    Raises:
-        ollama.ResponseError: If Ollama encounters an error.
-    """
-    chat_model = model_name or CHAT_MODEL
-
-    try:
-        try:
-            ollama.pull(chat_model)
-        except ollama.ResponseError as pull_error:
-            if pull_error.status_code != 404:
-                raise pull_error
-
-        options = {
-            "temperature": temperature,
-            "top_p": CHAT_MODEL_TOP_P,
-            "top_k": CHAT_MODEL_TOP_K,
-        }
-
-        if max_tokens:
-            options["num_predict"] = max_tokens
-
-        if system_prompt:
-            options["system"] = system_prompt
-
-        response = ollama.chat(model=chat_model, messages=messages, options=options)
-        return response.message.content
-    except ollama.ResponseError as e:
+                return await openvino_text_generation(
+                    messages, model or OPENVINO_CHAT_MODEL,
+                    temperature=temperature or CHAT_MODEL_TEMPERATURE,
+                    max_tokens=max_tokens or CHAT_MODEL_MAX_TOKENS,
+                    top_p=top_p or CHAT_MODEL_TOP_P,
+                    top_k=top_k or CHAT_MODEL_TOP_K,
+                )
+{{ ... }}
         if "model not found" in str(e).lower():
             raise ollama.ResponseError(f"Model {chat_model} not found and could not be pulled", 404)
         raise
 
 
-async def generate_response_stream(
+# OpenVINO specific functions
+def get_openvino_model_path(model_name: str) -> str:
+    """Get the full path to an OpenVINO model file.
+    
+    Args:
+        model_name (str): Name or path of the OpenVINO model
+        
+    Returns:
+        str: Full path to the model file
+    """
+    if not model_name:
+        return ""
+        
+    # If it's already a full path, return it
+    if os.path.isfile(model_name) and (model_name.endswith(".xml") or model_name.endswith(".bin")):
+        return model_name
+        
+    # Check in the models directory
+    model_dir = Path(OPENVINO_MODEL_DIR)
+    model_dir.mkdir(exist_ok=True, parents=True)
+    
+    # Try with .xml extension
+    if not model_name.endswith(".xml"):
+        model_path = model_dir / f"{model_name}.xml"
+        if model_path.exists():
+            return str(model_path)
+            
+    # Try as-is
+    model_path = model_dir / model_name
+    if model_path.exists():
+        return str(model_path)
+        
+    return ""
+
+_openvino_model_cache = {}
+
+def get_openvino_compiled_model(model_path: str):
+    """Get a compiled OpenVINO model, using cache if enabled.
+    
+    Args:
+        model_path (str): Path to the OpenVINO model
+        
+    Returns:
+        openvino.runtime.Model: Compiled OpenVINO model
+    """
+    global _openvino_model_cache
+    
+    if not model_path or not os.path.exists(model_path):
+        raise ValueError(f"Model path does not exist: {model_path}")
+        
+    # Check cache first
+    if OPENVINO_MODEL_CACHE and model_path in _openvino_model_cache:
+        logger.debug(f"Using cached OpenVINO model: {model_path}")
+        return _openvino_model_cache[model_path]
+        
+    # Load and compile the model
+    try:
+        logger.debug(f"Loading OpenVINO model: {model_path}")
+        ie = Core()
+        model = ie.read_model(model_path)
+        compiled_model = ie.compile_model(model, OPENVINO_DEVICE)
+        
+        # Store in cache if enabled
+        if OPENVINO_MODEL_CACHE:
+            _openvino_model_cache[model_path] = compiled_model
+            
+        return compiled_model
+    except Exception as e:
+        logger.error(f"Error loading OpenVINO model {model_path}: {e}")
+        raise
+
+def openvino_generate_embeddings(texts: List[str], embedding_dims: int) -> List[List[float]]:
+    """Generate embeddings using OpenVINO NPU.
+    
+    Args:
+        texts (List[str]): List of texts to generate embeddings for
+        embedding_dims (int): Expected embedding dimensions
+        
+    Returns:
+        List[List[float]]: List of embedding vectors
+    """
+    if not OPENVINO_EMBEDDING_MODEL:
+        logger.error("OPENVINO_EMBEDDING_MODEL not set")
+        return [[0.0] * embedding_dims] * len(texts)
+        
+    model_path = get_openvino_model_path(OPENVINO_EMBEDDING_MODEL)
+    if not model_path:
+        logger.error(f"Could not find OpenVINO embedding model: {OPENVINO_EMBEDDING_MODEL}")
+        return [[0.0] * embedding_dims] * len(texts)
+        
+    try:
+        # Load the model
+        compiled_model = get_openvino_compiled_model(model_path)
+        
+        # Get input and output names
+        input_names = list(compiled_model.inputs)
+        output_names = list(compiled_model.outputs)
+        
+        if not input_names or not output_names:
+            logger.error("Invalid OpenVINO model structure: missing inputs or outputs")
+            return [[0.0] * embedding_dims] * len(texts)
+            
+        input_name = input_names[0].any_name
+        output_name = output_names[0].any_name
+        
+        # Process each text and generate embeddings
+        embeddings = []
+        for text in texts:
+            # Prepare input - this is just a basic tokenization approach
+            # Real implementation would use the correct tokenization for the model
+            tokens = np.array([ord(c) for c in text[:512]]).astype(np.int32)
+            input_tensor = Tensor(tokens.reshape(1, -1))
+            
+            # Run inference
+            results = compiled_model({input_name: input_tensor})
+            embedding = results[output_name].data[0]
+            
+            # Normalize embedding
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = embedding / norm
+                
+            embeddings.append(embedding.tolist())
+            
+        return embeddings
+    except Exception as e:
+        logger.error(f"Error generating OpenVINO embeddings: {e}")
+        return [[0.0] * embedding_dims] * len(texts)
+
+async def openvino_text_generation(messages: List[Dict[str, str]], model_name: str, **kwargs) -> str:
+    """Generate text using OpenVINO NPU.
+    
+    Args:
+        messages (List[Dict[str, str]]): List of message dictionaries
+        model_name (str): Name of the OpenVINO model to use
+        **kwargs: Additional parameters
+        
+    Returns:
+        str: Generated text
+    """
+    if not model_name:
+        logger.error("OpenVINO model name not provided")
+        return "Error: OpenVINO model not configured. Please set OPENVINO_CHAT_MODEL environment variable."
+        
+    model_path = get_openvino_model_path(model_name)
+    if not model_path:
+        logger.error(f"Could not find OpenVINO model: {model_name}")
+        return f"Error: OpenVINO model '{model_name}' not found. Please check the model path."
+        
+    try:
+        # Load the model
+        compiled_model = get_openvino_compiled_model(model_path)
+        
+        # Get input and output names
+        input_names = list(compiled_model.inputs)
+        output_names = list(compiled_model.outputs)
+        
+        if not input_names or not output_names:
+            logger.error("Invalid OpenVINO model structure: missing inputs or outputs")
+            return "Error: Invalid OpenVINO model structure."
+            
+        input_name = input_names[0].any_name
+        output_name = output_names[0].any_name
+        
+        # Format messages into a prompt string
+        prompt = ""
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            
+            if role == "system":
+                prompt += f"System: {content}\n"
+            elif role == "user":
+                prompt += f"User: {content}\n"
+            elif role == "assistant":
+                prompt += f"Assistant: {content}\n"
+                
+        prompt += "Assistant: "
+        
+        # Very basic tokenization - replace with model-specific tokenization
+        tokens = np.array([ord(c) for c in prompt[:1024]]).astype(np.int32)
+        input_tensor = Tensor(tokens.reshape(1, -1))
+        
+        # Run inference
+        results = compiled_model({input_name: input_tensor})
+        output_ids = results[output_name].data[0]
+        
+        # Very basic detokenization - replace with model-specific detokenization
+        output_text = "".join([chr(id) for id in output_ids if 0 < id < 128])
+        
+        return output_text.strip()
+    except Exception as e:
+        logger.error(f"Error in OpenVINO text generation: {e}")
+        return f"Error: OpenVINO inference failed: {str(e)}"
+
+async def chat_completion(
     messages: List[Dict[str, str]],
-    system_prompt: Optional[str] = None,
-    project_path: Optional[str] = None,
-    provider: Optional[str] = None,
-    api_key: Optional[str] = None,
     model: Optional[str] = None,
-    max_tokens: Optional[int] = CHAT_MODEL_MAX_TOKENS,
-    temperature: float = CHAT_MODEL_TEMPERATURE,
-    use_memory: bool = True,
-    add_to_memory: bool = True
-) -> AsyncGenerator[str, None]:
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    top_p: Optional[float] = None,
+    top_k: Optional[int] = None,
+    system_prompt: Optional[str] = None,
+    memory_content: Optional[str] = None,
+    stream: bool = False,
+) -> Union[str, AsyncGenerator[str, None]]:
     """Generate a streaming response using the chat model.
 
+{{ ... }}
     Args:
         messages (List[Dict[str, str]]):
             List of message dictionaries with 'role' and 'content'.
